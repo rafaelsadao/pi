@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""pi — assistente de terminal que conhece seu sistema."""
+
+import subprocess, json, sys, os, re, shutil
+
+TOOLS = {
+    "download": ["wget", "curl", "aria2c", "axel"],
+    "archive":  ["tar", "gzip", "bzip2", "xz", "7z", "unzip", "zip"],
+    "transfer": ["git", "rsync", "scp", "sftp"],
+    "text":     ["jq", "yq", "ripgrep", "rg", "fd", "bat", "fzf", "sed", "awk"],
+    "system":   ["systemctl", "journalctl", "htop", "ncdu", "duf", "btop"],
+    "net":      ["ss", "netstat", "nmap", "nc", "ping", "dig", "mtr"],
+    "package":  ["apt", "dpkg", "snap", "flatpak", "pip", "npm"],
+}
+
+def check_tools():
+    """Which tools are actually installed?"""
+    found = {}
+    for category, cmds in TOOLS.items():
+        available = [c for c in cmds
+                     if subprocess.run(["which", c], capture_output=True).returncode == 0]
+        if available:
+            found[category] = available
+    return found
+
+def get_system_info():
+    """Quick system snapshot."""
+    lines = []
+    try:
+        r = subprocess.run(["lsb_release", "-ds"], capture_output=True, text=True)
+        lines.append(f"OS: {r.stdout.strip()}")
+    except Exception:
+        pass
+    lines.append(f"Shell: {os.environ.get('SHELL', '?')}")
+    lines.append(f"User: {os.environ.get('USER', '?')}")
+    try:
+        r = subprocess.run(["pwd"], capture_output=True, text=True)
+        lines.append(f"Dir: {r.stdout.strip()}")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+def ask_llm(prompt, server_url=None):
+    """Send to llama-server (OpenAI-compatible API)."""
+    url = server_url or os.environ.get("PI_SERVER_URL", "http://localhost:8080")
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 250,
+        "temperature": 0.3,
+        "stream": False
+    }
+    try:
+        r = subprocess.run(
+            ["curl", "-s", f"{url}/v1/chat/completions",
+             "-H", "Content-Type: application/json",
+             "-d", json.dumps(payload)],
+            capture_output=True, text=True, timeout=30
+        )
+        d = json.loads(r.stdout)
+        return d["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"Erro: {e}"
+
+def find_clipboard_tool():
+    """Detect available clipboard tool."""
+    for tool in ["xclip", "wl-copy", "xsel"]:
+        if shutil.which(tool):
+            return tool
+    return None
+
+def copy_to_clipboard(text):
+    """Copy text to clipboard using best available method."""
+    tool = find_clipboard_tool()
+    if tool in ("xclip", "xsel"):
+        try:
+            if tool == "xclip":
+                result = subprocess.run(["xclip", "-selection", "clipboard"],
+                               input=text, text=True, timeout=3,
+                               stderr=subprocess.DEVNULL)
+            else:
+                result = subprocess.run(["xsel", "-ib"], input=text, text=True, timeout=3,
+                               stderr=subprocess.DEVNULL)
+            if result.returncode == 0:
+                return tool
+        except Exception:
+            pass
+    elif tool == "wl-copy":
+        try:
+            result = subprocess.run(["wl-copy"], input=text, text=True, timeout=3,
+                           stderr=subprocess.DEVNULL)
+            if result.returncode == 0:
+                return tool
+        except Exception:
+            pass
+
+    # Fallback: OSC 52 (works in most modern terminals, SSH-safe)
+    encoded = text.strip().encode().hex()
+    sys.stdout.write(f"\033]52;c;{encoded}\a")
+    sys.stdout.flush()
+    return "OSC 52"
+
+def extract_commands(text):
+    """Extract commands from ```bash blocks."""
+    matches = re.findall(r'```(?:bash|sh)?\s*\n(.*?)\n```', text, re.DOTALL)
+    if not matches:
+        # Try inline backticks as fallback
+        matches = re.findall(r'`([^`]+)`', text)
+    return [m.strip() for m in matches]
+
+def main():
+    if len(sys.argv) < 2:
+        print("Uso: pi [-c] \"sua pergunta\"")
+        print('Ex:   pi "baixar arquivo grande com retomada"')
+        print("      pi -c \"comando\"  (copia automaticamente)")
+        sys.exit(1)
+
+    # Parse -c flag
+    args = sys.argv[1:]
+    force_copy = False
+    if args[0] == "-c":
+        force_copy = True
+        args = args[1:]
+
+    if not args:
+        print("Uso: pi [-c] \"sua pergunta\"")
+        sys.exit(1)
+
+    query = " ".join(args)
+    tools = check_tools()
+    sysinfo = get_system_info()
+
+    tool_lines = []
+    for cat, cmds in tools.items():
+        tool_lines.append(f"  {cat}: {', '.join(cmds)}")
+
+    prompt = f"""Voce eh o pi, um assistente de terminal Linux direto e pratico.
+
+SISTEMA DO USUARIO:
+{sysinfo}
+
+FERRAMENTAS DISPONIVEIS:
+{chr(10).join(tool_lines)}
+
+PERGUNTA: {query}
+
+Regras:
+- Responda em portugues, de forma direta.
+- Mostre APENAS o comando necessario, sem explicacoes longas.
+- Priorize ferramentas JA INSTALADAS no sistema.
+- Se houver multiplas opcoes, mostre a mais simples.
+- Se faltar ferramenta ideal, sugira instalar com apt.
+- Coloque SEMPRE o comando final dentro de ```bash.
+- No maximo 2 linhas de contexto + o comando."""
+
+    print("\n🤖 pi > ", end="", flush=True)
+    answer = ask_llm(prompt)
+    print(answer)
+
+    # Extract and highlight commands
+    commands = extract_commands(answer)
+    if commands:
+        print("\n" + "─" * 50)
+
+        for i, cmd in enumerate(commands):
+            # Skip lines that aren't shell commands (comments, etc)
+            if cmd.startswith("#") or len(cmd) < 3:
+                continue
+
+            # Highlight the command
+            if len(commands) > 1:
+                print(f"\033[1;33m📋 [{i+1}]\033[0m \033[1;32m{cmd}\033[0m")
+            else:
+                print(f"\033[1;33m📋 Comando:\033[0m \033[1;32m{cmd}\033[0m")
+
+            # Copy best command (first non-comment) to clipboard
+            if i == 0 or force_copy:
+                method = copy_to_clipboard(cmd)
+                print(f"   \033[90m✓ copiado via {method} — Ctrl+Shift+V para colar\033[0m")
+                break
+        print("─" * 50)
+
+if __name__ == "__main__":
+    main()
