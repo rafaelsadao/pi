@@ -2,14 +2,20 @@
 """pi — assistente de terminal que conhece seu sistema.
 
 Modos:
-  pi "pergunta"      → tiro único, comando no clipboard
-  pi chat            → chatbot interativo (/bye para sair)
+  pi "pergunta"           → tiro único, comando no clipboard
+  pi chat                 → chatbot interativo (auto-resume última sessão)
+  pi chat --new           → nova sessão
+  pi chat --session NOME  → sessão nomeada
+  pi sessions             → listar sessões salvas
 """
 
 import subprocess, json, sys, os, re, shutil, readline
+from datetime import datetime
+from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────
 SERVER_URL = os.environ.get("PI_SERVER_URL", "http://localhost:8080")
+SESSIONS_DIR = Path.home() / ".pi_sessions"
 BOLD = "\033[1m"
 GREEN = "\033[1;32m"
 YELLOW = "\033[1;33m"
@@ -116,6 +122,66 @@ def extract_commands(text):
         matches = re.findall(r'`([^`]+)`', text)
     return [m.strip() for m in matches]
 
+# ── Sessions ────────────────────────────────────────────────
+def _session_path(name):
+    """Return file path for a named session."""
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    return SESSIONS_DIR / f"{safe}.json"
+
+def _last_session_path():
+    """Return path to the most recently modified session file."""
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(SESSIONS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    return files[0] if files else None
+
+def save_session(name, messages, preview=""):
+    """Save session to disk."""
+    path = _session_path(name)
+    data = {
+        "name": name,
+        "updated": datetime.now().isoformat(),
+        "preview": preview[:100],
+        "message_count": len(messages),
+        "messages": messages,
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+def load_session(name):
+    """Load a session from disk. Returns (messages, metadata) or (None, None)."""
+    path = _session_path(name) if name else _last_session_path()
+    if not path or not path.exists():
+        return None, None
+    try:
+        data = json.loads(path.read_text())
+        return data.get("messages", []), data
+    except Exception:
+        return None, None
+
+def list_sessions():
+    """Return list of session metadata dicts."""
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    sessions = []
+    for f in sorted(SESSIONS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(f.read_text())
+            sessions.append({
+                "name": data.get("name", f.stem),
+                "updated": data.get("updated", "?"),
+                "preview": data.get("preview", ""),
+                "message_count": data.get("message_count", 0),
+            })
+        except Exception:
+            pass
+    return sessions
+
+def delete_session(name):
+    path = _session_path(name)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
 # ── Modo tiro único ─────────────────────────────────────────
 def oneshot(query, force_copy=False):
     tools = check_tools()
@@ -164,8 +230,8 @@ Regras:
         print("─" * 50)
 
 # ── Modo chat ───────────────────────────────────────────────
-def chat_mode():
-    """Chatbot interativo estilo llama.cpp UI."""
+def chat_mode(session_name=None, force_new=False):
+    """Chatbot interativo com salvamento automático de sessão."""
     sysinfo = get_system_info()
 
     system_prompt = f"""Voce eh o pi, um assistente de terminal Linux amigavel e prestativo.
@@ -177,18 +243,44 @@ Voce esta rodando em modo chat interativo. Seja conversacional, responda em port
 Se o usuario pedir comandos de terminal, coloque-os em ```bash.
 Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve."""
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # ── Resolver sessão ──
+    if force_new or session_name:
+        name = session_name or datetime.now().strftime("%Y%m%d-%H%M%S")
+        messages = [{"role": "system", "content": system_prompt}]
+        resumed = False
+    else:
+        # Auto-resume última sessão
+        existing, meta = load_session(None)
+        if existing:
+            messages = existing
+            name = meta.get("name", "default")
+            # Atualiza system prompt com info fresca do sistema
+            if messages and messages[0]["role"] == "system":
+                messages[0]["content"] = system_prompt
+            resumed = True
+        else:
+            name = datetime.now().strftime("%Y%m%d-%H%M%S")
+            messages = [{"role": "system", "content": system_prompt}]
+            resumed = False
+
     last_answer = ""
+    last_user_msg = ""
 
-    print(f"""\n{CYAN}{BOLD}🐍 pi chat{RESET} — assistente de terminal interativo
-{GRAY}Comandos:{RESET} /bye sair  /clear limpar  /system info  /copy copiar
-""")
+    # ── Banner ──
+    if resumed:
+        msg_count = len([m for m in messages if m["role"] != "system"])
+        print(f"\n{CYAN}{BOLD}🐍 pi chat{RESET} {GRAY}[{name}]{RESET} — {GRAY}{msg_count} msgs salvas{RESET}")
+    else:
+        print(f"\n{CYAN}{BOLD}🐍 pi chat{RESET} {GRAY}[{name}]{RESET} — nova sessão")
+    print(f"{GRAY}Comandos:{RESET} /bye /clear /system /copy /save /sessions /help\n")
 
+    # ── Loop principal ──
     while True:
         try:
             user_input = input(f"{GREEN}🧑 > {RESET}").strip()
         except (EOFError, KeyboardInterrupt):
-            print(f"\n{GRAY}👋 Até mais!{RESET}")
+            print(f"\n{GRAY}💾 Salvando... 👋 Até mais!{RESET}")
+            save_session(name, messages, preview=last_user_msg or "(vazia)")
             break
 
         if not user_input:
@@ -197,18 +289,23 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
         # ── Comandos internos ──
         if user_input.startswith("/"):
             cmd = user_input[1:].lower().split()[0]
+            arg = user_input[len(cmd)+1:].strip()
 
             if cmd in ("bye", "exit", "quit", "sair"):
-                print(f"{GRAY}👋 Até mais!{RESET}")
+                save_session(name, messages, preview=last_user_msg or "(vazia)")
+                print(f"{GRAY}💾 Sessão '{name}' salva. 👋 Até mais!{RESET}")
                 break
 
             elif cmd == "clear":
                 messages = [{"role": "system", "content": system_prompt}]
-                print(f"{GRAY}🧹 Histórico limpo.{RESET}")
+                last_answer = ""
+                last_user_msg = ""
+                save_session(name, messages)
+                print(f"{GRAY}🧹 Histórico limpo e salvo.{RESET}")
                 continue
 
             elif cmd == "system":
-                print(f"{GRAY}--- Sistema ---\n{sysinfo}\n---------------{RESET}")
+                print(f"{GRAY}--- Sistema ---\n{sysinfo}\n--- Sessão: {name} ({len(messages)} msgs) ---{RESET}")
                 continue
 
             elif cmd == "copy" and last_answer:
@@ -216,8 +313,26 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
                 print(f"{GRAY}✓ Última resposta copiada via {method}{RESET}")
                 continue
 
+            elif cmd == "save":
+                save_session(name, messages, preview=last_user_msg or "(vazia)")
+                print(f"{GRAY}💾 Sessão '{name}' salva ({len(messages)} msgs).{RESET}")
+                continue
+
+            elif cmd == "sessions":
+                sessions = list_sessions()
+                if sessions:
+                    print(f"\n{GRAY}{'SESSÃO':<25} {'MSGS':<6} {'ATUALIZADA':<20} PREVIEW")
+                    print(f"{'─'*25} {'─'*6} {'─'*20} {'─'*30}{RESET}")
+                    for s in sessions[:10]:
+                        marker = f"{GREEN}▶{RESET} " if s["name"] == name else "  "
+                        print(f"{marker}{s['name']:<23} {s['message_count']:<6} "
+                              f"{s['updated'][:19]:<20} {s['preview'][:40]}{RESET}")
+                else:
+                    print(f"{GRAY}Nenhuma sessão salva.{RESET}")
+                continue
+
             elif cmd == "help":
-                print(f"{GRAY}/bye sair  /clear limpar  /system info  /copy copiar  /help ajuda{RESET}")
+                print(f"{GRAY}/bye sair  /clear limpar  /system info  /copy copiar  /save salvar  /sessions listar  /help ajuda{RESET}")
                 continue
 
             else:
@@ -225,6 +340,7 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
                 continue
 
         # ── Enviar para LLM ──
+        last_user_msg = user_input
         messages.append({"role": "user", "content": user_input})
         print(f"{BOLD}🤖 > {RESET}", end="", flush=True)
 
@@ -235,7 +351,10 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
         messages.append({"role": "assistant", "content": answer})
         last_answer = answer
 
-        # Segurança: trim só acima de 500 mensagens (servidor cuida do contexto 64K)
+        # Auto-save a cada troca
+        save_session(name, messages, preview=user_input[:80])
+
+        # Segurança: trim só acima de 500 mensagens
         if len(messages) > 501:
             messages = [messages[0]] + messages[-400:]
 
@@ -245,29 +364,77 @@ def main():
 
     if not args:
         print("""Uso:
-  pi "sua pergunta"       tiro único, comando no clipboard
-  pi -c "comando"         força cópia de múltiplos comandos
-  pi chat                 chatbot interativo (/bye para sair)
-  pi help                 esta mensagem""")
+  pi "sua pergunta"         tiro único, comando no clipboard
+  pi -c "comando"           força cópia de múltiplos comandos
+  pi chat                   chatbot (auto-resume última sessão)
+  pi chat --new             nova sessão
+  pi chat --session NOME    sessão nomeada
+  pi sessions               listar sessões salvas
+  pi sessions --delete NOME deletar sessão
+  pi help                   esta mensagem""")
         sys.exit(0)
 
     if args[0] in ("help", "--help", "-h"):
         print("""Uso:
-  pi "sua pergunta"       tiro único, comando no clipboard
-  pi -c "comando"         força cópia de múltiplos comandos
-  pi chat                 chatbot interativo (/bye para sair)
+  pi "sua pergunta"         tiro único, comando no clipboard
+  pi -c "comando"           força cópia de múltiplos comandos
+  pi chat                   chatbot interativo (/bye para sair)
+  pi chat --new             nova sessão (não resume)
+  pi chat --session NOME    sessão nomeada
+  pi sessions               listar sessões
+  pi sessions --delete NOME deletar uma sessão
 
 Exemplos:
   pi "baixar arquivo grande com retomada"
   pi "listar processos que mais consomem RAM"
-  pi chat""")
+  pi chat
+  pi chat --session "python-study"
+  pi sessions""")
         sys.exit(0)
 
-    if args[0] == "chat":
-        chat_mode()
+    # ── pi sessions ──
+    if args[0] == "sessions":
+        if len(args) >= 3 and args[1] == "--delete":
+            name = args[2]
+            if delete_session(name):
+                print(f"🗑️  Sessão '{name}' deletada.")
+            else:
+                print(f"Sessão '{name}' não encontrada.")
+        else:
+            sessions = list_sessions()
+            if sessions:
+                print(f"\n{GRAY}{'SESSÃO':<25} {'MSGS':<6} {'ATUALIZADA':<20} PREVIEW")
+                print(f"{'─'*25} {'─'*6} {'─'*20} {'─'*30}{RESET}")
+                for s in sessions:
+                    label = s["name"]
+                    print(f"{label:<25} {s['message_count']:<6} "
+                          f"{s['updated'][:19]:<20} {s['preview'][:40]}{RESET}")
+                print()
+            else:
+                print("Nenhuma sessão salva em ~/.pi_sessions/")
         return
 
-    # Modo tiro único
+    # ── pi chat ──
+    if args[0] == "chat":
+        force_new = False
+        session_name = None
+
+        rest = args[1:]
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--new":
+                force_new = True
+            elif rest[i] == "--session" and i + 1 < len(rest):
+                session_name = rest[i + 1]
+                i += 1
+            else:
+                session_name = rest[i]  # pi chat nome-da-sessao
+            i += 1
+
+        chat_mode(session_name=session_name, force_new=force_new)
+        return
+
+    # ── Modo tiro único ──
     force_copy = False
     if args[0] == "-c":
         force_copy = True
