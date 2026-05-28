@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""pi — assistente de terminal que conhece seu sistema.
+"""p — assistente de terminal que conhece seu sistema.
 
 Modos:
-  pi "pergunta"           → tiro único, comando no clipboard
-  pi chat                 → chatbot interativo (auto-resume última sessão)
-  pi chat --new           → nova sessão
-  pi chat --session NOME  → sessão nomeada
-  pi sessions             → listar sessões salvas
+  p "pergunta"           → tiro único, comando no clipboard
+  p chat                 → chatbot interativo (auto-resume última sessão)
+  p chat --new           → nova sessão
+  p chat --session NOME  → sessão nomeada
+  p sessions             → listar sessões salvas
 """
 
 import subprocess, json, sys, os, re, shutil, readline
@@ -15,7 +15,7 @@ from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────
 SERVER_URL = os.environ.get("PI_SERVER_URL", "http://localhost:8080")
-SESSIONS_DIR = Path.home() / ".pi_sessions"
+SESSIONS_DIR = Path.home() / ".p_sessions"
 BOLD = "\033[1m"
 GREEN = "\033[1;32m"
 YELLOW = "\033[1;33m"
@@ -269,9 +269,9 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
     # ── Banner ──
     if resumed:
         msg_count = len([m for m in messages if m["role"] != "system"])
-        print(f"\n{CYAN}{BOLD}🐍 pi chat{RESET} {GRAY}[{name}]{RESET} — {GRAY}{msg_count} msgs salvas{RESET}")
+        print(f"\n{CYAN}{BOLD}🐍 p chat{RESET} {GRAY}[{name}]{RESET} — {GRAY}{msg_count} msgs salvas{RESET}")
     else:
-        print(f"\n{CYAN}{BOLD}🐍 pi chat{RESET} {GRAY}[{name}]{RESET} — nova sessão")
+        print(f"\n{CYAN}{BOLD}🐍 p chat{RESET} {GRAY}[{name}]{RESET} — nova sessão")
     print(f"{GRAY}Comandos:{RESET} /bye /clear /system /copy /save /sessions /help\n")
 
     # ── Loop principal ──
@@ -364,35 +364,35 @@ def main():
 
     if not args:
         print("""Uso:
-  pi "sua pergunta"         tiro único, comando no clipboard
-  pi -c "comando"           força cópia de múltiplos comandos
-  pi chat                   chatbot (auto-resume última sessão)
-  pi chat --new             nova sessão
-  pi chat --session NOME    sessão nomeada
-  pi sessions               listar sessões salvas
-  pi sessions --delete NOME deletar sessão
-  pi help                   esta mensagem""")
+  p "sua pergunta"         tiro único, comando no clipboard
+  p -c "comando"           força cópia de múltiplos comandos
+  p chat                   chatbot (auto-resume última sessão)
+  p chat --new             nova sessão
+  p chat --session NOME    sessão nomeada
+  p sessions               listar sessões salvas
+  p sessions --delete NOME deletar sessão
+  p help                   esta mensagem""")
         sys.exit(0)
 
     if args[0] in ("help", "--help", "-h"):
         print("""Uso:
-  pi "sua pergunta"         tiro único, comando no clipboard
-  pi -c "comando"           força cópia de múltiplos comandos
-  pi chat                   chatbot interativo (/bye para sair)
-  pi chat --new             nova sessão (não resume)
-  pi chat --session NOME    sessão nomeada
-  pi sessions               listar sessões
-  pi sessions --delete NOME deletar uma sessão
+  p "sua pergunta"         tiro único, comando no clipboard
+  p -c "comando"           força cópia de múltiplos comandos
+  p chat                   chatbot interativo (/bye para sair)
+  p chat --new             nova sessão (não resume)
+  p chat --session NOME    sessão nomeada
+  p sessions               listar sessões
+  p sessions --delete NOME deletar uma sessão
 
 Exemplos:
-  pi "baixar arquivo grande com retomada"
-  pi "listar processos que mais consomem RAM"
-  pi chat
-  pi chat --session "python-study"
-  pi sessions""")
+  p "baixar arquivo grande com retomada"
+  p "listar processos que mais consomem RAM"
+  p chat
+  p chat --session "python-study"
+  p sessions""")
         sys.exit(0)
 
-    # ── pi sessions ──
+    # ── p sessions ──
     if args[0] == "sessions":
         if len(args) >= 3 and args[1] == "--delete":
             name = args[2]
@@ -414,7 +414,7 @@ Exemplos:
                 print("Nenhuma sessão salva em ~/.pi_sessions/")
         return
 
-    # ── pi chat ──
+    # ── p chat ──
     if args[0] == "chat":
         force_new = False
         session_name = None
@@ -428,7 +428,7 @@ Exemplos:
                 session_name = rest[i + 1]
                 i += 1
             else:
-                session_name = rest[i]  # pi chat nome-da-sessao
+                session_name = rest[i]  # p chat nome-da-sessao
             i += 1
 
         chat_mode(session_name=session_name, force_new=force_new)
@@ -441,7 +441,7 @@ Exemplos:
         args = args[1:]
 
     if not args:
-        print("Uso: pi [-c] \"sua pergunta\"")
+        print("Uso: p [-c] \"sua pergunta\"")
         sys.exit(1)
 
     query = " ".join(args)
