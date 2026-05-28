@@ -228,16 +228,16 @@ Seja direto mas nao robotico — use emojis ocasionalmente, mantenha um tom leve
         messages.append({"role": "user", "content": user_input})
         print(f"{BOLD}🤖 > {RESET}", end="", flush=True)
 
-        answer = ask_llm(messages, max_tokens=1024, temperature=0.7)
+        answer = ask_llm(messages, max_tokens=4096, temperature=0.7)
         print(answer)
         print()
 
         messages.append({"role": "assistant", "content": answer})
         last_answer = answer
 
-        # Trim histórico se ficar muito longo (>40 mensagens)
-        if len(messages) > 41:  # system + 20 pares
-            messages = [messages[0]] + messages[-40:]
+        # Segurança: trim só acima de 500 mensagens (servidor cuida do contexto 64K)
+        if len(messages) > 501:
+            messages = [messages[0]] + messages[-400:]
 
 # ── Main ────────────────────────────────────────────────────
 def main():
