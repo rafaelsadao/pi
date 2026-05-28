@@ -57,6 +57,38 @@ pi "encontrar arquivos modificados nas últimas 24h"
 pi -c "criar usuário e configurar chave SSH"
 ```
 
+### Modo Chat
+
+Entre no modo chatbot interativo — conversa livre com o LLM, mantendo contexto entre mensagens:
+
+```bash
+pi chat
+```
+
+```
+🐍 pi chat — assistente de terminal interativo
+Comandos: /bye sair  /clear limpar  /system info  /copy copiar
+
+🧑 > qual a capital do Brasil?
+🤖 > A capital do Brasil é Brasília 🇧🇷
+
+🧑 > e a população aproximada?
+🤖 > Cerca de 300 mil habitantes...
+
+🧑 > /bye
+👋 Até mais!
+```
+
+**Comandos do chat:**
+
+| Comando | Ação |
+|---------|------|
+| `/bye`, `/exit`, `/quit` | Sair do chat |
+| `/clear` | Limpar histórico da conversa |
+| `/system` | Mostrar informações do sistema |
+| `/copy` | Copiar última resposta |
+| `/help` | Listar comandos |
+
 ## Como funciona
 
 ```
